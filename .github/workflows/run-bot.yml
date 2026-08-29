@@ -55,9 +55,9 @@ jobs:
         env:
           SESSION_ID: ${{ secrets.SESSION_ID }}
 
-      - name: Start the Bot
+      - name: Run Bot
         run: npm start
         env:
-          # If users want to use GitHub Secrets instead of config.js, they can put keys here
+          PAIRING_NUMBER: ${{ secrets.PAIRING_NUMBER }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

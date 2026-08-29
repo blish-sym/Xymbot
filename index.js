@@ -14,25 +14,7 @@ const fs = require("fs");
 const path = require("path");
 require('./config');
 
-const express = require('express');
-const app = express();
-const port = process.env.PORT || 3000;
 
-global.pairingCode = '';
-app.get('/', (req, res) => {
-    res.send(`
-        <html>
-        <head><title>Xymbot</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
-            <h1>Xymbot is Running! 🚀</h1>
-            ${global.pairingCode ? `<h2>Pairing Code: <span style="color: blue;">${global.pairingCode}</span></h2><p>Enter this code in your WhatsApp linked devices.</p>` : '<h3>Bot is connected and ready.</h3>'}
-        </body>
-        </html>
-    `);
-});
-app.listen(port, () => {
-    console.log(`🌍 Web server is running on port ${port}`);
-});
 
 // Load blocked chats globally
 global.blockedChats = [];
@@ -84,32 +66,24 @@ async function startBot() {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
         },
-        browser: Browsers.ubuntu('Chrome'),
+        browser: ["Xymbot", "safari", "18.2.0"],
     });
 
     conn.ev.on('creds.update', saveCreds);
 
-    if (!conn.authState.creds.registered) {
-        let phoneNumber = global.owner[0] ? global.owner[0].replace(/[^0-9]/g, '') : null;
-        if (phoneNumber) {
-            setTimeout(async () => {
-                try {
-                    let code = await conn.requestPairingCode(phoneNumber);
-                    code = code?.match(/.{1,4}/g)?.join("-") || code;
-                    global.pairingCode = code;
-                    console.log(`\n======================================================\n`);
-                    console.log(`📱 YOUR PAIRING CODE IS: ${code}`);
-                    console.log(`\n======================================================\n`);
-                } catch (e) {
-                    console.error('Failed to request pairing code:', e);
-                }
-            }, 3000);
-        } else {
-             console.log("No owner number found in config to request pairing code.");
-        }
+    if (!conn.authState.creds.registered && process.env.PAIRING_NUMBER) {
+        setTimeout(async () => {
+            try {
+                let code = await conn.requestPairingCode(process.env.PAIRING_NUMBER.replace(/[^0-9]/g, ''));
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                console.log(`\n=========================================`);
+                console.log(`🔑 YOUR PAIRING CODE IS: ${code}`);
+                console.log(`=========================================\n`);
+            } catch(e) {
+                console.log("Failed to request pairing code:", e);
+            }
+        }, 3000);
     }
-
-
     // ─── AUDIO ID3 TAG INTERCEPTOR ──────────────────────────────────────────────
     const originalSendMessage = conn.sendMessage.bind(conn);
     conn.sendMessage = async (jid, content, options) => {
