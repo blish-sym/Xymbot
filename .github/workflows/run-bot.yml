@@ -27,17 +27,26 @@ jobs:
       - name: Create Session
         run: |
           mkdir -p session
-          node -e "
-            const fs = require('fs');
-            let data = process.env.SESSION_ID || '';
-            if (data) {
-              data = data.replace('XYMBOT~', '').trim();
-              fs.writeFileSync('session/creds.json', Buffer.from(data, 'base64'));
-              console.log('✅ Session file successfully generated from secret!');
-            } else {
-              console.log('❌ No SESSION_ID secret found!');
-            }
-          "
+          if [ -f "Xymbot-Session.zip" ]; then
+            echo "📦 Found Xymbot-Session.zip in repository! Extracting..."
+            unzip -o Xymbot-Session.zip -d session/
+          elif [ -f "session.zip" ]; then
+            echo "📦 Found session.zip in repository! Extracting..."
+            unzip -o session.zip -d session/
+          else
+            echo "🔍 No zip file found. Falling back to SESSION_ID secret..."
+            node -e "
+              const fs = require('fs');
+              let data = process.env.SESSION_ID || '';
+              if (data) {
+                data = data.replace('XYMBOT~', '').trim();
+                fs.writeFileSync('session/creds.json', Buffer.from(data, 'base64'));
+                console.log('✅ Session file successfully generated from secret!');
+              } else {
+                console.log('❌ No session data provided!');
+              }
+            "
+          fi
         env:
           SESSION_ID: ${{ secrets.SESSION_ID }}
 
