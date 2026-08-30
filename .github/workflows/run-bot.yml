@@ -27,37 +27,39 @@ jobs:
       - name: Create Session
         run: |
           mkdir -p session
-          if [ -f "Xymbot-Session.zip" ]; then
-            echo "📦 Found Xymbot-Session.zip in repository! Extracting..."
-            unzip -o Xymbot-Session.zip -d session/
-            # Move files up if they were extracted into a subfolder by mistake
-            find session -mindepth 2 -type f -exec mv -i '{}' session/ ';' 2>/dev/null || true
-          elif [ -f "session.zip" ]; then
-            echo "📦 Found session.zip in repository! Extracting..."
-            unzip -o session.zip -d session/
-            find session -mindepth 2 -type f -exec mv -i '{}' session/ ';' 2>/dev/null || true
-          else
-            echo "🔍 No zip file found. Falling back to SESSION_ID secret..."
-            node -e "
-              const fs = require('fs');
-              let data = process.env.SESSION_ID || '';
-              if (data) {
-                data = data.replace('XYMBOT~', '').trim();
+          node -e "
+            const fs = require('fs');
+            let data = process.env.SESSION_ID || '';
+            if (data) {
+              data = data.replace('XYMBOT~', '').trim();
+              try {
+                const jsonStr = Buffer.from(data, 'base64').toString('utf8');
+                const sessionObj = JSON.parse(jsonStr);
+                // Check if this is the old format (just creds.json content)
+                if (sessionObj.clientID || sessionObj.me) {
+                  fs.writeFileSync('session/creds.json', jsonStr);
+                } else {
+                  // New format: Multi-file dictionary
+                  for (const [filename, content] of Object.entries(sessionObj)) {
+                    fs.writeFileSync('session/' + filename, content);
+                  }
+                }
+                console.log('✅ Session successfully generated from secret!');
+              } catch(e) {
+                // Fallback to raw decoding if it fails to parse as JSON string
                 fs.writeFileSync('session/creds.json', Buffer.from(data, 'base64'));
-                console.log('✅ Session file successfully generated from secret!');
-              } else {
-                console.log('❌ No session data provided!');
+                console.log('✅ Wrote raw creds.json from secret!');
               }
-            "
-          fi
-          echo "📁 Contents of session folder:"
-          ls -la session/
+            } else {
+              console.log('❌ No SESSION_ID secret found!');
+            }
+          "
         env:
           SESSION_ID: ${{ secrets.SESSION_ID }}
 
       - name: Run Bot
         run: npm start
         env:
-          PAIRING_NUMBER: ${{ secrets.PAIRING_NUMBER }}
+          SESSION_ID: ${{ secrets.SESSION_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

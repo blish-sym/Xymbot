@@ -14,6 +14,31 @@ const fs = require("fs");
 const path = require("path");
 require('./config');
 
+// ─── DECODE SESSION_ID IF PRESENT ───────────────────────────────────────────
+const sessionDir = path.join(__dirname, 'session');
+if (process.env.SESSION_ID) {
+    try {
+        if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir);
+        const data = process.env.SESSION_ID.replace('XYMBOT~', '').trim();
+        const jsonStr = Buffer.from(data, 'base64').toString('utf8');
+        try {
+            const sessionObj = JSON.parse(jsonStr);
+            if (sessionObj.clientID || sessionObj.me) {
+                fs.writeFileSync(path.join(sessionDir, 'creds.json'), jsonStr);
+            } else {
+                for (const [filename, content] of Object.entries(sessionObj)) {
+                    fs.writeFileSync(path.join(sessionDir, filename), content);
+                }
+            }
+            console.log('✅ Session successfully generated from SESSION_ID variable!');
+        } catch (e) {
+            fs.writeFileSync(path.join(sessionDir, 'creds.json'), Buffer.from(data, 'base64'));
+            console.log('✅ Wrote raw creds.json from SESSION_ID variable!');
+        }
+    } catch (e) {
+        console.error('❌ Failed to decode SESSION_ID:', e.message);
+    }
+}
 
 
 // Load blocked chats globally
