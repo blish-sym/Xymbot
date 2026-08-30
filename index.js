@@ -1,45 +1,8 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    makeCacheableSignalKeyStore,
-    fetchLatestBaileysVersion,
-    Browsers,
-    downloadMediaMessage,
-    getAggregateVotesInPollMessage
-} = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
 const fs = require("fs");
 const path = require("path");
 require('./config');
-
-// ─── DECODE SESSION_ID IF PRESENT ───────────────────────────────────────────
-const sessionDir = path.join(__dirname, 'session');
-if (process.env.SESSION_ID) {
-    try {
-        if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir);
-        const data = process.env.SESSION_ID.replace('XYMBOT~', '').trim();
-        const jsonStr = Buffer.from(data, 'base64').toString('utf8');
-        try {
-            const sessionObj = JSON.parse(jsonStr);
-            if (sessionObj.clientID || sessionObj.me) {
-                fs.writeFileSync(path.join(sessionDir, 'creds.json'), jsonStr);
-            } else {
-                for (const [filename, content] of Object.entries(sessionObj)) {
-                    fs.writeFileSync(path.join(sessionDir, filename), content);
-                }
-            }
-            console.log('✅ Session successfully generated from SESSION_ID variable!');
-        } catch (e) {
-            fs.writeFileSync(path.join(sessionDir, 'creds.json'), Buffer.from(data, 'base64'));
-            console.log('✅ Wrote raw creds.json from SESSION_ID variable!');
-        }
-    } catch (e) {
-        console.error('❌ Failed to decode SESSION_ID:', e.message);
-    }
-}
-
 
 // Load blocked chats globally
 global.blockedChats = [];
@@ -52,20 +15,38 @@ if (fs.existsSync(blockedChatsFile)) {
     }
 }
 
-// Ensure tmp directory exists
+// Ensure tmp & session directory exists
 if (!fs.existsSync('./tmp')) fs.mkdirSync('./tmp');
+if (!fs.existsSync('./session')) fs.mkdirSync('./session');
+
+// ─── XYMBOT SESSION DECODER ───────────────────────────────────────────────────
+if (process.env.SESSION_ID && process.env.SESSION_ID.startsWith("XYMBOT~")) {
+    try {
+        console.log("🔄 Decoding Session ID...");
+        const base64Data = process.env.SESSION_ID.replace("XYMBOT~", "");
+        const sessionJson = JSON.parse(Buffer.from(base64Data, 'base64').toString('utf-8'));
+        
+        for (const [filename, fileContent] of Object.entries(sessionJson)) {
+            const filePath = path.join('./session', filename);
+            const contentToWrite = typeof fileContent === 'string' ? fileContent : JSON.stringify(fileContent, null, 2);
+            fs.writeFileSync(filePath, contentToWrite);
+        }
+        console.log("✅ Session files extracted successfully!");
+    } catch (e) {
+        console.error("❌ Failed to decode SESSION_ID. Ensure you copied the exact code.", e);
+    }
+}
 
 // ─── LOAD ALL PLUGINS ONCE AT STARTUP ─────────────────────────────────────────
 const { commands } = require('./command');
-const handlerPlugins = []; // handler-style plugins (module.exports = async fn)
+const handlerPlugins = [];
 
 function loadPlugins() {
-    handlerPlugins.length = 0; // Reset
-    commands.length = 0; // Reset cmd plugins
+    handlerPlugins.length = 0; 
+    commands.length = 0; 
     const files = fs.readdirSync('./plugins').filter(f => f.endsWith('.js'));
     for (const file of files) {
         try {
-            // Clear cache so fresh code loads on each bot restart
             delete require.cache[require.resolve(`./plugins/${file}`)];
             const plugin = require(`./plugins/${file}`);
             if (typeof plugin === 'function' && plugin.command) {
@@ -79,6 +60,18 @@ function loadPlugins() {
 }
 
 async function startBot() {
+    // 🚀 DYNAMIC IMPORT FOR ESM COMPATIBILITY (Fixes Render Crash) 🚀
+    const {
+        default: makeWASocket,
+        useMultiFileAuthState,
+        DisconnectReason,
+        makeCacheableSignalKeyStore,
+        fetchLatestBaileysVersion,
+        Browsers,
+        downloadMediaMessage,
+        getAggregateVotesInPollMessage
+    } = await import("@whiskeysockets/baileys");
+
     const { version, isLatest } = await fetchLatestBaileysVersion();
     const { state, saveCreds } = await useMultiFileAuthState('session');
 
@@ -109,6 +102,7 @@ async function startBot() {
             }
         }, 3000);
     }
+
     // ─── AUDIO ID3 TAG INTERCEPTOR ──────────────────────────────────────────────
     const originalSendMessage = conn.sendMessage.bind(conn);
     conn.sendMessage = async (jid, content, options) => {
@@ -129,10 +123,7 @@ async function startBot() {
                     let thumbPath = path.join(__dirname, './assets/mention/thumb.jpg');
                     let thumbBuf = fs.existsSync(thumbPath) ? fs.readFileSync(thumbPath) : Buffer.alloc(0);
 
-                    // Run ffmpeg tagging
                     let taggedMp3 = await tagAudio(audioBuffer, title, artist, thumbBuf);
-
-                    // Overwrite content payload
                     content.audio = taggedMp3;
                     content.mimetype = 'audio/mpeg';
                 }
@@ -182,7 +173,6 @@ async function startBot() {
         } else if (connection === 'open') {
             console.log('✅ Connected! Bot is online.');
 
-            // Automatically set logged in / paired user as owner
             const pairedUserJid = conn.user.id;
             const pairedNumber = pairedUserJid ? pairedUserJid.split(':')[0].split('@')[0] : '';
             if (!Array.isArray(global.owner)) global.owner = [];
@@ -191,9 +181,8 @@ async function startBot() {
                 console.log(`👑 Paired WhatsApp account (+${pairedNumber}) registered as Bot Owner & Admin.`);
             }
 
-            loadPlugins(); // Load plugins fresh on connect
+            loadPlugins();
 
-            // Send startup message to paired owner
             const targetNumber = pairedNumber || (global.owner && global.owner[0]);
             if (targetNumber) {
                 const ownerJid = targetNumber + '@s.whatsapp.net';
@@ -203,7 +192,7 @@ async function startBot() {
                     const totalCommands = commands.length + handlerPlugins.length;
                     const msg = `*🚀 BOT CONNECTED SUCCESSFULLY!*\n\n` +
                         `*🤖 Bot Name:* ${global.botName}\n` +
-                        `*👨‍💻 Owner:* ${global.ownerName}\n` +
+                        `*👨‍💻 Owner:* 🤍⃞𝄟ꪶ𝐒͢ʏ᪳ᴀ͓м͎ ͢𝐒ᴇ͓ꪳʀ͎𖦻⃞🍓\n` +
                         `*📱 Paired Number:* +${pairedNumber}\n` +
                         `*⚙️ Prefix:* .\n` +
                         `*📦 Total Commands:* ${totalCommands}\n` +
@@ -216,15 +205,12 @@ async function startBot() {
     });
 
     conn.ev.on('group-participants.update', async (update) => {
-        console.log('🔔 [EVENT] group-participants.update fired:', JSON.stringify(update));
         try {
             const groupUpdateHandler = require('./plugins/groupUpdate.js');
             const m = { chat: update.id };
-            // Fetch group metadata for subject and member count
             try {
                 m.metadata = await conn.groupMetadata(update.id);
             } catch (e) {
-                console.error('Failed to fetch groupMetadata:', e);
                 m.metadata = { subject: 'the group', participants: [] };
             }
             await groupUpdateHandler(m, { conn, participants: update.participants, action: update.action });
@@ -233,20 +219,16 @@ async function startBot() {
         }
     });
 
-
-
     conn.ev.on('messages.upsert', async (chatUpdate) => {
         try {
             const m = chatUpdate.messages[0];
             if (!m || !m.message) return;
             if (m.key.remoteJid === 'status@broadcast') return;
 
-            // Ignore old messages (older than 60 seconds) so the bot doesn't process backlog on startup
             const msgTime = m.messageTimestamp;
             const currentTime = Math.floor(Date.now() / 1000);
             if (msgTime && (currentTime - msgTime > 60)) return;
 
-            // ── Set up core message properties ───────────────────────────────
             m.chat = m.key.remoteJid;
             m.isGroup = m.chat.endsWith('@g.us');
             m.sender = m.key.fromMe
@@ -255,16 +237,12 @@ async function startBot() {
             m.senderNumber = m.sender.split('@')[0].split(':')[0];
             m.pushName = m.pushName || 'User';
 
-            // Set m.reply so handler-style plugins can use it
             m.reply = (text) => conn.sendMessage(m.chat, { text: String(text) }, { quoted: m });
 
             m.type = Object.keys(m.message).find(k =>
                 !['messageContextInfo', 'senderKeyDistributionMessage'].includes(k)
             ) || 'conversation';
 
-
-
-            // Detect quoted/replied-to message
             const ctxInfo = m.message?.extendedTextMessage?.contextInfo
                 || m.message?.imageMessage?.contextInfo
                 || m.message?.videoMessage?.contextInfo
@@ -291,7 +269,6 @@ async function startBot() {
                 m.quoted = null;
             }
 
-            // ── Parse body ────────────────────────────────────────────────────
             const body = m.message.conversation
                 || m.message.extendedTextMessage?.text
                 || m.message.imageMessage?.caption
@@ -307,7 +284,6 @@ async function startBot() {
             const args = isCmd ? body.slice(prefix.length).trim().split(/ +/).slice(1) : body.trim().split(/ +/);
             const q = args.join(' ');
 
-            // ── Determine ownership (paired account, fromMe, or global.owner) ──
             const normalizeJid = (jid) => jid ? jid.split(':')[0].split('@')[0] + '@s.whatsapp.net' : jid;
             const botJid = normalizeJid(conn.user.id);
             const botNumber = conn.user.id ? conn.user.id.split(':')[0].split('@')[0] : '';
@@ -321,7 +297,6 @@ async function startBot() {
             if (global.WORKTYPE === 'private' && !isOwner) return;
             if (global.WORKTYPE === 'sudo' && !isOwner && !isSudo) return;
 
-            // ── Determine group admin status (Owner is automatically Admin) ────
             const from = m.chat;
             let groupMetadata = null, groupName = '', participants = [],
                 groupAdmins = [], isBotAdmins = false, isAdmins = isOwner;
@@ -345,8 +320,6 @@ async function startBot() {
                 const res = await conn.sendMessage(from, { text: textStr }, { quoted: m });
                 if (textStr.toLowerCase().includes('error')) {
                     try {
-                        const fs = require('fs');
-                        const path = require('path');
                         const errorAudio = fs.readFileSync(path.join(__dirname, 'assets/audio/error.mp3'));
                         await conn.sendMessage(from, { audio: errorAudio, mimetype: 'audio/mpeg', ptt: false, id3Tagged: true }, { quoted: m });
                     } catch (e) {
@@ -356,10 +329,8 @@ async function startBot() {
                 return res;
             };
 
-            // ── Check Blocked Chat ──────────────────────────────────────────────
             const isBlockedChat = global.blockedChats && global.blockedChats.includes(from);
 
-            // ── Run handler-style plugins ─────────────────────────────────────
             for (const plugin of handlerPlugins) {
                 if (isBlockedChat && !isOwner) continue;
 
@@ -392,13 +363,9 @@ async function startBot() {
 
             let isExactCommandMatch = false;
 
-            // ── Run cmd-style plugins ─────────────────────────────────────────
             for (const cmd of commands) {
                 if (isBlockedChat && !isOwner) {
-                    // Bypass block ONLY for the mention auto-responder
-                    if (cmd.desc !== 'Auto-responds when bot or SUDO is mentioned') {
-                        continue;
-                    }
+                    if (cmd.desc !== 'Auto-responds when bot or SUDO is mentioned') continue;
                 }
 
                 try {
@@ -444,7 +411,6 @@ async function startBot() {
                             reply
                         });
 
-                        // Custom Audio logic
                         if (isCmd && global.cmdAudio && !m.audioPlayed) {
                             let matchedCmd = null;
                             if (global.cmdAudio[command]) matchedCmd = command;
@@ -462,10 +428,9 @@ async function startBot() {
 
                             if (matchedCmd) {
                                 const audioFile = global.cmdAudio[matchedCmd];
-                                const fs = require('fs');
                                 if (fs.existsSync(audioFile)) {
                                     try {
-                                        m.audioPlayed = true; // Prevent playing multiple times for the same message
+                                        m.audioPlayed = true; 
                                         await conn.sendMessage(from, { 
                                             audio: fs.readFileSync(audioFile), 
                                             mimetype: 'audio/ogg; codecs=opus', 
@@ -479,31 +444,4 @@ async function startBot() {
                         }
                     }
                 } catch (e) {
-                    console.error(`CMD Plugin Error [${cmd.pattern}]:`, e.message);
-                }
-            }
-
-            // Spelling Check Logic (Command Not Found)
-            if (isCmd && command && !isExactCommandMatch && global.cmdAudio && global.cmdAudio['spelling']) {
-                const fs = require('fs');
-                const audioFile = global.cmdAudio['spelling'];
-                if (fs.existsSync(audioFile)) {
-                    try {
-                        await conn.sendMessage(from, { 
-                            audio: fs.readFileSync(audioFile), 
-                            mimetype: 'audio/ogg; codecs=opus', 
-                            ptt: true 
-                        }, { quoted: m });
-                    } catch(e) {
-                        console.error('Failed to send spelling audio:', e);
-                    }
-                }
-            }
-
-        } catch (err) {
-            console.error("Handler Error:", err.message);
-        }
-    });
-}
-
-startBot();
+                    console.erro
